@@ -8,6 +8,7 @@ use std::ffi::OsStr;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::{create_dir_all, rename, File};
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
+use std::iter::once;
 use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command, ExitStatus, Stdio};
@@ -148,10 +149,7 @@ fn test_commit_graph() {
             (
                 Oid::parse(b"AA").unwrap(),
                 Commit {
-                    parents: [b"CC"]
-                        .into_iter()
-                        .map(|o| Oid::parse(o).unwrap())
-                        .collect(),
+                    parents: once(b"CC").map(|o| Oid::parse(o).unwrap()).collect(),
                     children: BTreeSet::new(),
                 }
             ),
@@ -159,7 +157,7 @@ fn test_commit_graph() {
                 Oid::parse(b"CC").unwrap(),
                 Commit {
                     parents: BTreeSet::new(),
-                    children: [Oid::parse(b"AA").unwrap()].into_iter().collect(),
+                    children: once(Oid::parse(b"AA").unwrap()).collect(),
                 }
             ),
         ]
@@ -238,7 +236,7 @@ fn closest_commits(
     targets: BTreeSet<Oid>,
     filter: impl Fn(&Oid) -> Result<bool, String>,
 ) -> Result<BTreeSet<Oid>, String> {
-    let mut candidates: BTreeSet<_> = [start].into_iter().collect();
+    let mut candidates: BTreeSet<_> = once(start).collect();
     let mut checked = BTreeSet::<Oid>::new();
 
     loop {
@@ -276,7 +274,6 @@ fn closest_commits(
 
 #[test]
 fn test_closest_commits_skip() {
-    use std::iter::once;
     let oid = Oid::parse(b"AA").unwrap();
     let graph = once((oid.clone(), Commit::default())).collect();
     let history = once(oid.clone()).collect();
