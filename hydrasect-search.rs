@@ -88,7 +88,7 @@ fn test_oid_debug() {
     assert_eq!(debug, "Oid(0011f9065a1ad1da4db67bec8d535d91b0a78fba)");
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 struct Commit {
     parents: BTreeSet<Oid>,
     children: BTreeSet<Oid>,
@@ -178,6 +178,14 @@ fn status_to_result(status: ExitStatus, name: &'static str) -> Result<(), String
     Ok(())
 }
 
+fn bool_status_to_result(status: ExitStatus, name: &'static str) -> Result<bool, String> {
+    if status.code() == Some(1) {
+        return Ok(false);
+    }
+    status_to_result(status, name)?;
+    Ok(true)
+}
+
 fn bisect_graph() -> Result<BTreeMap<Oid, Commit>, String> {
     let mut child = Command::new("git")
         .args(&["log", "--format=%H %P", "--bisect"])
@@ -228,21 +236,26 @@ fn closest_commits(
     start: Oid,
     graph: BTreeMap<Oid, Commit>,
     targets: BTreeSet<Oid>,
-) -> BTreeSet<Oid> {
+    filter: impl Fn(&Oid) -> Result<bool, String>,
+) -> Result<BTreeSet<Oid>, String> {
     let mut candidates: BTreeSet<_> = [start].into_iter().collect();
     let mut checked = BTreeSet::<Oid>::new();
 
     loop {
         if candidates.is_empty() {
-            return candidates;
+            return Ok(candidates);
         }
 
         let matches: BTreeSet<_> = candidates
             .intersection(&targets)
-            .map(Clone::clone)
+            .map(|oid| filter(oid).map(|r| (oid, r)))
+            .filter(|res| !matches!(res, Ok((_, false))))
+            .collect::<Result<BTreeSet<_>, _>>()?
+            .into_iter()
+            .map(|(oid, _)| oid.clone())
             .collect();
         if !matches.is_empty() {
-            return matches;
+            return Ok(matches);
         }
 
         let new_candidates = candidates
@@ -262,6 +275,21 @@ fn closest_commits(
 }
 
 #[test]
+fn test_closest_commits_skip() {
+    use std::iter::once;
+    let oid = Oid::parse(b"AA").unwrap();
+    let graph = once((oid.clone(), Commit::default())).collect();
+    let history = once(oid.clone()).collect();
+    fn pred(_: &Oid) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    assert!(closest_commits(oid, graph, history, pred)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn test_closest_commits() {
     let graph = b"AA BB\n\
                   BB CC\n\
@@ -270,8 +298,11 @@ fn test_closest_commits() {
                   FF 00";
     let history = read_history(&*b"AA 0\nFF 0\n00 0\n".to_vec()).unwrap();
     let graph = commit_graph(&*graph.to_vec()).unwrap();
+    fn pred(_: &Oid) -> Result<bool, String> {
+        Ok(true)
+    }
 
-    let actual = closest_commits(Oid::parse(b"CC").unwrap(), graph, history);
+    let actual = closest_commits(Oid::parse(b"CC").unwrap(), graph, history, pred).unwrap();
     let expected = [b"AA", b"FF"]
         .into_iter()
         .map(|o| Oid::parse(o).unwrap())
@@ -425,11 +456,7 @@ fn git_is_ancestor(lhs: &dyn AsRef<OsStr>, rhs: &dyn AsRef<OsStr>) -> Result<boo
         .status()
         .map_err(|e| format!("spawning git merge-base --is-ancestor: {}", e))?;
 
-    if status.code() == Some(1) {
-        return Ok(false);
-    }
-    status_to_result(status, "git merge-base --is-ancestor")?;
-    Ok(true)
+    bool_status_to_result(status, "git merge-base --is-ancestor")
 }
 
 fn update_history_file(path: &Path) -> Result<File, String> {
@@ -519,6 +546,21 @@ fn open_history_file() -> Result<File, String> {
     Ok(file)
 }
 
+fn commit_not_skipped(oid: &Oid) -> Result<bool, String> {
+    let status = Command::new("git")
+        .args(&[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/bisect/skip-{}", oid),
+        ])
+        .stdout(Stdio::null())
+        .status()
+        .map_err(|e| format!("spawning git rev-parse --verify: {}", e))?;
+
+    Ok(!bool_status_to_result(status, "git rev-parse --verify")?)
+}
+
 fn run() -> Result<(), String> {
     let history_file = open_history_file()
         .map(BufReader::new)
@@ -526,8 +568,10 @@ fn run() -> Result<(), String> {
     let history = read_history(history_file).map_err(|e| format!("reading history file: {}", e))?;
     let head = git_rev_parse("HEAD").map_err(|e| format!("resolving HEAD: {}", e))?;
     let graph = bisect_graph().map_err(|e| format!("finding bisect graph: {}", e))?;
+    let commits = closest_commits(head, graph, history, commit_not_skipped)
+        .map_err(|e| format!("finding closest commits: {}", e))?;
 
-    for commit in closest_commits(head, graph, history) {
+    for commit in commits {
         println!("{}", commit);
     }
 
