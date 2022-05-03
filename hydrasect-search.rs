@@ -448,19 +448,22 @@ fn update_history_file(path: &Path) -> Result<File, String> {
         .status()
         .map_err(|e| format!("spawning curl: {}", e))?;
 
-    if let Some(code) = status.code() {
-        if code > 4 && code != 48 {
+    match status.code() {
+        Some(0) => {
+            match rename(&tmp_path, path) {
+                // If the source file doesn't exist, we got a 304 Not Modified,
+                // so the existing file is up to date.
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                r => r.map_err(|e| format!("moving new history file into place: {}", e)),
+            }?;
+        }
+        Some(code) if code > 4 && code != 48 => {
             eprintln!("Warning: failed to update the Hydra evaluation history file.");
         }
+        _ => {
+            status_to_result(status, "curl")?;
+        }
     }
-    status_to_result(status, "curl")?;
-
-    match rename(&tmp_path, path) {
-        // If the source file doesn't exist, we got a 304 Not Modified,
-        // so the existing file is up to date.
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-        r => r.map_err(|e| format!("moving new history file into place: {}", e)),
-    }?;
 
     File::open(&path).map_err(|e| format!("opening updated history file: {}", e))
 }
