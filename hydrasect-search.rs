@@ -3,14 +3,14 @@
 
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
+use std::env::{self, args};
 use std::ffi::OsStr;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::{create_dir_all, rename, File};
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{exit, Command, ExitStatus, Stdio};
 use std::str;
 use std::time::{Duration, SystemTime};
 
@@ -516,11 +516,29 @@ fn open_history_file() -> Result<File, String> {
     Ok(file)
 }
 
-fn main() {
-    let history = read_history(BufReader::new(open_history_file().unwrap())).unwrap();
-    let head = git_rev_parse("HEAD").unwrap();
+fn run() -> Result<(), String> {
+    let history_file = open_history_file()
+        .map(BufReader::new)
+        .map_err(|e| format!("opening history file: {}", e))?;
+    let history = read_history(history_file).map_err(|e| format!("reading history file: {}", e))?;
+    let head = git_rev_parse("HEAD").map_err(|e| format!("resolving HEAD: {}", e))?;
+    let graph = bisect_graph().map_err(|e| format!("finding bisect graph: {}", e))?;
 
-    for commit in closest_commits(head, bisect_graph().unwrap(), history) {
+    for commit in closest_commits(head, graph, history) {
         println!("{}", commit);
+    }
+
+    Ok(())
+}
+
+fn main() {
+    let argv0_option = args().next();
+    let argv0 = argv0_option
+        .as_ref()
+        .map(String::as_str)
+        .unwrap_or("hydrasect-search");
+    if let Err(e) = run() {
+        eprintln!("{}: {}", argv0, e);
+        exit(1);
     }
 }
