@@ -95,21 +95,34 @@ struct Commit {
     children: BTreeSet<Oid>,
 }
 
-fn commit_graph(input: impl BufRead) -> Result<BTreeMap<Oid, Commit>, String> {
+#[derive(Debug, PartialEq)]
+struct CommitGraph {
+    bad: Option<Oid>,
+    commits: BTreeMap<Oid, Commit>,
+}
+
+fn commit_graph(input: impl BufRead) -> Result<CommitGraph, String> {
     fn parse_oid(s: &[u8]) -> Result<Oid, String> {
         Oid::parse(s).map_err(|e| e.to_string())
     }
 
-    let dag = input
-        .split(b'\n')
-        .map(|line| {
-            let line = line.map_err(|e| format!("reading commit graph: {}", e))?;
-            let mut fields = line.split(|b| *b == b' ');
-            let oid = fields.next().ok_or_else(|| "empty line".to_string())?;
-            let parents = fields.map(parse_oid).collect::<Result<_, _>>()?;
-            Ok((parse_oid(oid)?, parents))
-        })
-        .collect::<Result<BTreeMap<_, BTreeSet<_>>, String>>()?;
+    fn parse_line(line: io::Result<Vec<u8>>) -> Result<(Oid, BTreeSet<Oid>), String> {
+        let line = line.map_err(|e| format!("reading commit graph: {}", e))?;
+        let mut fields = line.split(|b| *b == b' ');
+        let oid = fields.next().ok_or_else(|| "empty line".to_string())?;
+        let parents = fields.map(parse_oid).collect::<Result<_, _>>()?;
+        Ok((parse_oid(oid)?, parents))
+    }
+
+    let mut parsed_lines = input.split(b'\n').map(parse_line).peekable();
+
+    let bad = match parsed_lines.peek() {
+        None => None,
+        Some(Err(e)) => return Err(e.clone()),
+        Some(Ok((oid, _))) => Some(oid.clone()),
+    };
+
+    let dag = parsed_lines.collect::<Result<BTreeMap<_, _>, String>>()?;
 
     // Create a mapping from parent commits to their children.
     let mut paternities = BTreeMap::<_, BTreeSet<_>>::new();
@@ -138,31 +151,37 @@ fn commit_graph(input: impl BufRead) -> Result<BTreeMap<Oid, Commit>, String> {
         })
         .collect();
 
-    Ok(undirected_graph)
+    Ok(CommitGraph {
+        bad,
+        commits: undirected_graph,
+    })
 }
 
 #[test]
 fn test_commit_graph() {
     assert_eq!(
         commit_graph(&*b"AA BB CC\nCC DD\n".to_vec()).unwrap(),
-        vec![
-            (
-                Oid::parse(b"AA").unwrap(),
-                Commit {
-                    parents: once(b"CC").map(|o| Oid::parse(o).unwrap()).collect(),
-                    children: BTreeSet::new(),
-                }
-            ),
-            (
-                Oid::parse(b"CC").unwrap(),
-                Commit {
-                    parents: BTreeSet::new(),
-                    children: once(Oid::parse(b"AA").unwrap()).collect(),
-                }
-            ),
-        ]
-        .into_iter()
-        .collect()
+        CommitGraph {
+            bad: Some(Oid::parse(b"AA").unwrap()),
+            commits: vec![
+                (
+                    Oid::parse(b"AA").unwrap(),
+                    Commit {
+                        parents: once(b"CC").map(|o| Oid::parse(o).unwrap()).collect(),
+                        children: BTreeSet::new(),
+                    }
+                ),
+                (
+                    Oid::parse(b"CC").unwrap(),
+                    Commit {
+                        parents: BTreeSet::new(),
+                        children: once(Oid::parse(b"AA").unwrap()).collect(),
+                    }
+                ),
+            ]
+            .into_iter()
+            .collect()
+        }
     );
 }
 
@@ -184,7 +203,7 @@ fn bool_status_to_result(status: ExitStatus, name: &'static str) -> Result<bool,
     Ok(true)
 }
 
-fn bisect_graph() -> Result<BTreeMap<Oid, Commit>, String> {
+fn bisect_graph() -> Result<CommitGraph, String> {
     let mut child = Command::new("git")
         .args(&["log", "--format=%H %P", "--bisect"])
         .stdout(Stdio::piped())
@@ -232,12 +251,16 @@ fn test_read_history() {
 
 fn closest_commits(
     start: Oid,
-    graph: BTreeMap<Oid, Commit>,
-    targets: BTreeSet<Oid>,
+    graph: CommitGraph,
+    mut targets: BTreeSet<Oid>,
     filter: impl Fn(&Oid) -> Result<bool, String>,
 ) -> Result<BTreeSet<Oid>, String> {
     let mut candidates: BTreeSet<_> = once(start).collect();
     let mut checked = BTreeSet::<Oid>::new();
+
+    if let Some(ref bad) = graph.bad {
+        targets.remove(bad);
+    }
 
     loop {
         if candidates.is_empty() {
@@ -259,7 +282,7 @@ fn closest_commits(
         let new_candidates = candidates
             .iter()
             .flat_map(|candidate| {
-                let commit = graph.get(&candidate).unwrap();
+                let commit = graph.commits.get(&candidate).unwrap();
                 commit.children.union(&commit.parents)
             })
             .map(Clone::clone)
@@ -275,7 +298,10 @@ fn closest_commits(
 #[test]
 fn test_closest_commits_skip() {
     let oid = Oid::parse(b"AA").unwrap();
-    let graph = once((oid.clone(), Commit::default())).collect();
+    let graph = CommitGraph {
+        bad: None,
+        commits: once((oid.clone(), Commit::default())).collect(),
+    };
     let history = once(oid.clone()).collect();
     fn pred(_: &Oid) -> Result<bool, String> {
         Ok(false)
@@ -300,7 +326,7 @@ fn test_closest_commits() {
     }
 
     let actual = closest_commits(Oid::parse(b"CC").unwrap(), graph, history, pred).unwrap();
-    let expected = [b"AA", b"FF"]
+    let expected = [b"FF"]
         .into_iter()
         .map(|o| Oid::parse(o).unwrap())
         .collect();
