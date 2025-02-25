@@ -205,7 +205,7 @@ fn bool_status_to_result(status: ExitStatus, name: &'static str) -> Result<bool,
 
 fn bisect_graph() -> Result<CommitGraph, String> {
     let mut child = Command::new("git")
-        .args(&["log", "--format=%H %P", "--bisect"])
+        .args(["log", "--format=%H %P", "--bisect"])
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to spawn git log: {}", e))?;
@@ -282,7 +282,7 @@ fn closest_commits(
         let new_candidates = candidates
             .iter()
             .flat_map(|candidate| {
-                let commit = graph.commits.get(&candidate).unwrap();
+                let commit = graph.commits.get(candidate).unwrap();
                 commit.children.union(&commit.parents)
             })
             .map(Clone::clone)
@@ -388,7 +388,7 @@ fn last_line(reader: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
         from_end += buf.len() as i64;
     }
 
-    buf.resize(0, 0);
+    buf.clear();
     reader.read_to_end(&mut buf)?;
 
     if buf.last() == Some(&b'\n') {
@@ -463,7 +463,7 @@ fn test_last_line_long() {
 
 fn git_is_ancestor(lhs: &dyn AsRef<OsStr>, rhs: &dyn AsRef<OsStr>) -> Result<bool, String> {
     let status = Command::new("git")
-        .args(&["merge-base", "--is-ancestor"])
+        .args(["merge-base", "--is-ancestor"])
         .arg(lhs)
         .arg(rhs)
         .status()
@@ -505,7 +505,7 @@ fn update_history_file(path: &Path) -> Result<File, String> {
         }
     }
 
-    File::open(&path).map_err(|e| format!("opening updated history file: {}", e))
+    File::open(path).map_err(|e| format!("opening updated history file: {}", e))
 }
 
 fn open_history_file() -> Result<File, String> {
@@ -561,7 +561,7 @@ fn open_history_file() -> Result<File, String> {
 
 fn commit_not_skipped(oid: &Oid) -> Result<bool, String> {
     let status = Command::new("git")
-        .args(&[
+        .args([
             "rev-parse",
             "--verify",
             "-q",
@@ -593,10 +593,8 @@ fn run() -> Result<(), String> {
 
 fn main() {
     let argv0_option = args().next();
-    let argv0 = argv0_option
-        .as_ref()
-        .map(String::as_str)
-        .unwrap_or("hydrasect-search");
+    let argv0 = argv0_option.as_deref().unwrap_or("hydrasect-search");
+
     if let Err(e) = run() {
         eprintln!("{}: {}", argv0, e);
         exit(1);
