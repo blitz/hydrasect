@@ -400,17 +400,7 @@ fn last_line(reader: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
 
 #[cfg(test)]
 fn tmpfile() -> io::Result<File> {
-    use std::os::raw::c_int;
-
-    extern "C" {
-        fn tmpfd() -> c_int;
-    }
-
-    let fd = unsafe { tmpfd() };
-    if fd == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    unsafe { Ok(File::from_raw_fd(fd)) }
+    tempfile::tempfile()
 }
 
 #[test]
