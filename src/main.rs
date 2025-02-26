@@ -1,19 +1,18 @@
 // SPDX-FileCopyrightText: 2022 Alyssa Ross <hi@alyssa.is>
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
-use std::env::{self, args};
+use std::env::args;
 use std::ffi::OsStr;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::fs::{create_dir_all, rename, File};
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader};
 use std::iter::once;
 use std::os::unix::prelude::*;
-use std::path::{Path, PathBuf};
 use std::process::{exit, Command, ExitStatus, Stdio};
 use std::str;
-use std::time::{Duration, SystemTime};
+
+use hydrasect::history::open_history_file;
+use log::{debug, info};
 
 struct OidParseError([u8; 2]);
 
@@ -347,218 +346,6 @@ fn git_rev_parse(commit: impl AsRef<OsStr>) -> Result<Oid, String> {
     Oid::parse(&stdout).map_err(|e| format!("parsing git rev-parse output: {}", e))
 }
 
-fn last_line(reader: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
-    let mut buf = vec![0; 4096];
-    // Skip an extra character the first time to avoid considering a
-    // trailing newline.
-    let mut from_end = buf.len() as i64 + 1;
-
-    loop {
-        match reader.seek(SeekFrom::End(-from_end)) {
-            // EINVAL means we tried to seek to before the beginning.
-            Err(e) if e.kind() == ErrorKind::InvalidInput => {
-                // Avoid trying to read past the end, for the case
-                // where the file is smaller than buf.
-                let file_len = reader.seek(SeekFrom::End(0))? as usize;
-                buf.resize(min(file_len, buf.len()), 0);
-
-                // Clamp our position to the start of the file.
-                reader.rewind()?;
-            }
-            r => {
-                r?;
-            }
-        }
-
-        reader.read_exact(&mut buf)?;
-
-        // Rewind to one character after the last newline we found, if any.
-        if let Some(i) = buf.iter().rposition(|b| b == &b'\n') {
-            reader.seek(SeekFrom::Current(-(buf.len() as i64) + i as i64 + 1))?;
-            break;
-        }
-
-        // If we're at the start of the stream, this is the only line
-        // in the file, and we're done.
-        if reader.stream_position()? as usize - buf.len() == 0 {
-            reader.rewind()?;
-            break;
-        }
-
-        from_end += buf.len() as i64;
-    }
-
-    buf.clear();
-    reader.read_to_end(&mut buf)?;
-
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-    }
-
-    Ok(buf)
-}
-
-#[cfg(test)]
-fn tmpfile() -> io::Result<File> {
-    tempfile::tempfile()
-}
-
-#[test]
-fn test_last_line_empty() {
-    let mut file = tmpfile().unwrap();
-    let line = last_line(&mut file).unwrap();
-    assert!(line.is_empty());
-}
-
-#[test]
-fn test_last_line_first() {
-    use std::io::{Seek, Write};
-
-    let len = 4096 * 3;
-    let mut data = vec![b'a'; len];
-    *data.last_mut().unwrap() = b'\n';
-
-    let mut file = tmpfile().unwrap();
-    file.write_all(&data).unwrap();
-    file.rewind().unwrap();
-
-    let line = last_line(&mut file).unwrap();
-    assert_eq!(data[..(len - 1)], line);
-}
-
-#[test]
-fn test_last_line_short() {
-    use std::io::{Seek, Write};
-
-    let len = 1024;
-    let mut data = vec![b'a'; len];
-    data[len - 10] = b'\n';
-    data[len - 9] = b'b';
-
-    let mut file = tmpfile().unwrap();
-    file.write_all(&data).unwrap();
-    file.rewind().unwrap();
-
-    let line = last_line(&mut file).unwrap();
-    assert_eq!(data[(len - 9)..], line);
-}
-
-#[test]
-fn test_last_line_long() {
-    use std::io::{Seek, Write};
-
-    let len = 4096 * 3;
-    let mut data = vec![b'a'; len];
-    *data.last_mut().unwrap() = b'\n';
-    data[len / 2] = b'\n';
-    data[len / 2 + 1] = b'b';
-
-    let mut file = tmpfile().unwrap();
-    file.write_all(&data).unwrap();
-    file.rewind().unwrap();
-
-    let line = last_line(&mut file).unwrap();
-    assert_eq!(data[(len / 2 + 1)..(len - 1)], line);
-}
-
-fn git_is_ancestor(lhs: &dyn AsRef<OsStr>, rhs: &dyn AsRef<OsStr>) -> Result<bool, String> {
-    let status = Command::new("git")
-        .args(["merge-base", "--is-ancestor"])
-        .arg(lhs)
-        .arg(rhs)
-        .status()
-        .map_err(|e| format!("spawning git merge-base --is-ancestor: {}", e))?;
-
-    bool_status_to_result(status, "git merge-base --is-ancestor")
-}
-
-fn update_history_file(path: &Path) -> Result<File, String> {
-    if let Some(parent) = path.parent() {
-        let _ = create_dir_all(parent);
-    }
-
-    let tmp_path = path.with_extension("tmp");
-
-    let status = Command::new("curl")
-        .arg("-fLsSo")
-        .arg(&tmp_path)
-        .arg("-z")
-        .arg(path)
-        .arg("https://channels.nix.gsc.io/nixpkgs-unstable/history")
-        .status()
-        .map_err(|e| format!("spawning curl: {}", e))?;
-
-    match status.code() {
-        Some(0) => {
-            match rename(&tmp_path, path) {
-                // If the source file doesn't exist, we got a 304 Not Modified,
-                // so the existing file is up to date.
-                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-                r => r.map_err(|e| format!("moving new history file into place: {}", e)),
-            }?;
-        }
-        Some(code) if code > 4 && code != 48 => {
-            eprintln!("Warning: failed to update the Hydra evaluation history file.");
-        }
-        _ => {
-            status_to_result(status, "curl")?;
-        }
-    }
-
-    File::open(path).map_err(|e| format!("opening updated history file: {}", e))
-}
-
-fn open_history_file() -> Result<File, String> {
-    let mut path: PathBuf = match env::var_os("XDG_CACHE_HOME") {
-        Some(v) if !v.is_empty() => v.into(),
-        _ => match env::var_os("HOME") {
-            Some(v) if !v.is_empty() => {
-                let mut path_buf = PathBuf::from(v);
-                path_buf.push(".cache");
-                path_buf
-            }
-            _ => {
-                return Err("XDG_CACHE_HOME and HOME are both unset or empty".to_string());
-            }
-        },
-    };
-    path.push("hydrasect/hydra-eval-history");
-
-    let mut file = match File::open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            return update_history_file(&path).map_err(|e| format!("updating history file: {}", e))
-        }
-        Err(e) => {
-            return Err(format!("opening history file: {}", e));
-        }
-    };
-
-    let most_recent_eval = last_line(&mut file)
-        .map(parse_history_line)
-        .map_err(|e| format!("reading last line of history file: {}", e))?;
-    file.rewind().unwrap();
-
-    if !git_is_ancestor(&"refs/bisect/bad", &most_recent_eval.to_string())
-        .map_err(|e| format!("checking history freshness: {}", e))?
-    {
-        let mtime = file
-            .metadata()
-            .map_err(|e| format!("checking history file metadata: {}", e))?
-            .modified()
-            .map_err(|e| format!("checking history file modified date: {}", e))?;
-        if SystemTime::now()
-            .duration_since(mtime)
-            .map_err(|e| format!("checking time since history file modification: {}", e))?
-            > Duration::from_secs(15 * 60)
-        {
-            file = update_history_file(&path)?;
-        }
-    }
-
-    Ok(file)
-}
-
 fn commit_not_skipped(oid: &Oid) -> Result<bool, String> {
     let status = Command::new("git")
         .args([
@@ -592,6 +379,13 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    simple_logger::SimpleLogger::new()
+        .env()
+        .without_timestamps()
+        .init()
+        .unwrap();
+    info!("Info message");
+
     let argv0_option = args().next();
     let argv0 = argv0_option.as_deref().unwrap_or("hydrasect-search");
 

@@ -3,7 +3,14 @@ name = "hydrasect"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[[bin]]
+name = "hydrascrape"
+path = "src/hydrascrape.rs"
 
-[dev-dependencies]
+[dependencies]
+anyhow = "1.0.96"
+log = "0.4.26"
+reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde_json = "1.0.139"
+simple_logger = { version = "5.0.0", features = ["colored"] }
 tempfile = "3.17.1"
