@@ -10,13 +10,12 @@ use tempfile::NamedTempFile;
 
 use hydrasect::history::history_file_path;
 
-const HYDRA_URL: &'static str = "https://hydra.nixos.org";
-const PROJECT: &'static str = "nixos";
-const JOBSET: &'static str = "unstable-small";
+const HYDRA_URL: &str = "https://hydra.nixos.org";
+const PROJECT: &str = "nixos";
+const JOBSET: &str = "unstable-small";
 
 fn fetch_page(client: &Client, page_suffix: &str) -> Result<Value> {
     let url = format!("{HYDRA_URL}/jobset/{PROJECT}/{JOBSET}/evals{}", page_suffix);
-    eprintln!("Fetching: {url}");
 
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, "application/json".parse().unwrap());
@@ -24,9 +23,16 @@ fn fetch_page(client: &Client, page_suffix: &str) -> Result<Value> {
     Ok(client.get(url).headers(headers).send()?.json()?)
 }
 
+fn parse_page(page_suffix: &str) -> Option<u32> {
+    page_suffix
+        .split_once("=")
+        .and_then(|(_first, second)| second.parse().ok())
+}
+
 fn main() -> Result<()> {
     eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
 
+    let progress = indicatif::ProgressBar::no_length();
     let client = Client::new();
 
     let mut page_suffix: String = "".to_string();
@@ -40,8 +46,21 @@ fn main() -> Result<()> {
     let mut history_file = NamedTempFile::new()?;
 
     loop {
+        progress.set_position(parse_page(&page_suffix).unwrap_or(1).into());
+
         let page_content = fetch_page(&client, &page_suffix)?;
         let current_page = page_content.as_object().expect("expected object");
+
+        if progress.length().is_none() {
+            let last_page_str = current_page
+                .get("last")
+                .expect("expected key last")
+                .as_str()
+                .expect("expected string");
+            if let Some(last_page) = parse_page(last_page_str) {
+                progress.set_length(last_page.into());
+            }
+        }
 
         for eval in current_page
             .get("evals")
@@ -87,4 +106,17 @@ fn main() -> Result<()> {
     history_file.into_temp_path().persist(history_file_path)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_parse_page_suffix() {
+        assert_eq!(parse_page(""), None);
+        assert_eq!(parse_page("xxx"), None);
+        assert_eq!(parse_page("?page=588"), Some(588));
+        assert_eq!(parse_page("?page=xxx"), None);
+    }
 }

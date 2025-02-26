@@ -12,7 +12,6 @@ use std::process::{exit, Command, ExitStatus, Stdio};
 use std::str;
 
 use hydrasect::history::open_history_file;
-use log::{debug, info};
 
 struct OidParseError([u8; 2]);
 
@@ -384,7 +383,6 @@ fn main() {
         .without_timestamps()
         .init()
         .unwrap();
-    info!("Info message");
 
     let argv0_option = args().next();
     let argv0 = argv0_option.as_deref().unwrap_or("hydrasect-search");
