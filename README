@@ -1,62 +1,49 @@
-Hydrasect
-=========
+# Hydrasect
 
 Identify and prioritize commits evaluated and built by Hydra when
-bisecting Nixpkgs.  This can make the Nixpkgs bisection process much
+bisecting Nixpkgs. This can make the Nixpkgs bisection process much
 faster, by avoiding unnecessary rebuilds caused by testing commits in
 between Hydra evaluations, when commits built by Hydra (with build
 results in cache.nixos.org) remain to be tested.
 
+## Installation
 
-Installation
-------------
+🚧 This repo is a [Nix Flake](https://wiki.nixos.org/wiki/Flakes). 🚧
 
-Build dependencies:
- - Meson
- - Ninja
- - rustc
+## Usage
 
-Runtime dependencies:
- - Git
- - curl
+First you need to download the latest Hydra evaluations via:
 
-In most cases, installation should be as simple as
+```
+$ hydrascrape
+Scraping all nixos/unstable-small evaluations from https://hydra.nixos.org...
+█████████████████████████████████████████████████████████████████████ 591/591
+Replacing old history file with new data.
+```
 
-	meson build
-	ninja -C build install
+🚧 This currently takes a long time and could be optimized by just
+downloading any data. 🚧
 
-
-Usage
------
-
-The hydrasect-search program, when run in a Nixpkgs bisect, prints the
+The `hydrasect` program, when run in a Nixpkgs bisect, prints the
 closest commit(s) to HEAD that have been evaluated by hydra.nixos.org,
 and are yet to be tested in the bisect.
 
 So, to run a Hydra-aware Nixpkgs bisect, any time git bisect checks
 out a commit to be tested, simply run:
 
-    git checkout $(hydrasect-search | head -1)
+```console
+$ git checkout $(hydrasect | head -1)
+```
 
 If there is a suitable Hydra commit, it will be checked out and can be
 tested instead of Git's suggestion.
 
+## Acknowledgements
 
-Development
------------
+This version of hydrasect is a fork of [this
+version](https://git.qyliss.net/hydrasect/) from Alyssa Ross.
 
-The upstream git repository for Hydrasect is available at
-<https://git.qyliss.net/hydrasect/>.
-
-Bugs and patches can be sent to the author,
-Alyssa Ross <hi@alyssa.is>.
-
-For information about how to use git to send a patch email, see
-<https://git-send-email.io/>.
-
-
-License
--------
+### Original License
 
 Copyright 2022 Alyssa Ross <hi@alyssa.is>
 
