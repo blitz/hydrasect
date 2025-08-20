@@ -3,7 +3,7 @@ use std::{fs::create_dir_all, io::Write};
 use anyhow::Result;
 use reqwest::{
     blocking::Client,
-    header::{HeaderMap, ACCEPT},
+    header::{HeaderMap, ACCEPT, USER_AGENT},
 };
 use serde_json::Value;
 use tempfile::NamedTempFile;
@@ -19,6 +19,7 @@ fn fetch_page(client: &Client, page_suffix: &str) -> Result<Value> {
 
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, "application/json".parse().unwrap());
+    headers.insert(USER_AGENT, "hydrasect".parse().unwrap());
 
     Ok(client.get(url).headers(headers).send()?.json()?)
 }
