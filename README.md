@@ -40,6 +40,19 @@ $ git checkout $(hydrasect | head -1)
 If there is a suitable Hydra commit, it will be checked out and can be
 tested instead of Git's suggestion.
 
+One may use this in an automated bisect as follows:
+
+```sh
+cached_commits="$(hydrasect 2>/dev/null)"
+if [[ "$?" -eq 0 ]]; then
+    # we have cached commits, so switch to one
+    git checkout --force "$(echo "${cached_commits}" | head -1)"
+else
+    # no cached revision available
+    ...
+fi
+```
+
 ## Acknowledgements
 
 This version of hydrasect is a fork of [this
