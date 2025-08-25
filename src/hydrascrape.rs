@@ -44,7 +44,7 @@ fn main() -> Result<()> {
 
     create_dir_all(&history_file_dir)?;
 
-    let mut history_file = NamedTempFile::new()?;
+    let mut history_file = NamedTempFile::new_in(&history_file_dir)?;
 
     loop {
         progress.set_position(parse_page(&page_suffix).unwrap_or(1).into());
