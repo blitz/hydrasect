@@ -218,9 +218,10 @@ fn bisect_graph() -> Result<CommitGraph, String> {
     graph_result.map_err(|e| format!("parsing git log output: {}", e))
 }
 
-fn parse_history_line(line: Vec<u8>) -> Oid {
+fn parse_history_line(line: &[u8]) -> Oid {
     let oid_str = line
         .into_iter()
+        .copied()
         .take_while(u8::is_ascii_hexdigit)
         .collect::<Vec<_>>();
     Oid::parse(&oid_str).unwrap()
@@ -229,7 +230,7 @@ fn parse_history_line(line: Vec<u8>) -> Oid {
 fn read_history(input: impl BufRead) -> io::Result<BTreeSet<Oid>> {
     input
         .split(b'\n')
-        .map(|line| Ok(parse_history_line(line?)))
+        .map(|line| Ok(parse_history_line(&line?)))
         .collect()
 }
 
