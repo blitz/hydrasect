@@ -63,3 +63,10 @@ version](https://git.qyliss.net/hydrasect/) from Alyssa Ross.
 Copyright 2022 Alyssa Ross <hi@alyssa.is>
 
 Licensed under the EUPL.
+
+### Related work
+
+- [`nix-bisect`](https://github.com/timokau/nix-bisect) - facilitates automated bisects for nix builds.
+- [`nixpkgs-staging-bisecter`](https://github.com/symphorien/nixpkgs-staging-bisecter) -
+pick commits in a bisect to limit the number of derivations built, [complementing
+`hydrasect`](https://github.com/symphorien/nixpkgs-staging-bisecter/#usage-with-hydrasect).
