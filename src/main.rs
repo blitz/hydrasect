@@ -368,6 +368,11 @@ fn run() -> Result<(), String> {
     let history = read_history(history_file).map_err(|e| format!("reading history file: {}", e))?;
     let head = git_rev_parse("HEAD").map_err(|e| format!("resolving HEAD: {}", e))?;
     let graph = bisect_graph().map_err(|e| format!("finding bisect graph: {}", e))?;
+
+    if graph.commits.is_empty() {
+        return Err("not currently bisecting. Start a bisect with `git bisect start`.".to_string());
+    }
+
     let commits = closest_commits(head, graph, history, commit_not_skipped)
         .map_err(|e| format!("finding closest commits: {}", e))?;
 
