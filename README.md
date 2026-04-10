@@ -24,6 +24,15 @@ Replacing old history file with new data.
 🚧 This currently takes a long time and could be optimized by just
 downloading any data. 🚧
 
+To avoid re-fetching Hydra's full history on subsequent runs, pass
+`--from <eval_id>` to limit scraping to evaluations with an id greater
+than or equal to the given value. Existing entries below the cutoff are
+preserved from the previous history file:
+
+```
+$ hydrascrape --from 1150000
+```
+
 The `hydrasect` program, when run in a Nixpkgs bisect, prints the
 closest commit(s) to HEAD that have been evaluated by hydra.nixos.org,
 and are yet to be tested in the bisect.

@@ -1,6 +1,11 @@
-use std::{fs::create_dir_all, io::Write};
+use std::{
+    env,
+    fs::{create_dir_all, File},
+    io::{BufRead, BufReader, Write},
+    process::ExitCode,
+};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, ACCEPT, USER_AGENT},
@@ -30,8 +35,46 @@ fn parse_page(page_suffix: &str) -> Option<u32> {
         .and_then(|(_first, second)| second.parse().ok())
 }
 
-fn main() -> Result<()> {
-    eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
+fn parse_args() -> Result<Option<u64>> {
+    let mut from: Option<u64> = None;
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--from=") {
+            from = Some(value.parse()?);
+        } else if arg == "--from" {
+            let value = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("--from requires a value"))?;
+            from = Some(value.parse()?);
+        } else {
+            bail!("unknown argument: {arg}");
+        }
+    }
+    Ok(from)
+}
+
+fn main() -> Result<ExitCode> {
+    let from = match parse_args() {
+        Ok(from) => from,
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!(
+                "\nUsage: hydrascrape [--from <eval_id>]\n\n\
+                 --from <eval_id>    Stop scraping once all remaining evaluations\n\
+                                     have an id lower than <eval_id>. Useful to\n\
+                                     avoid re-fetching Hydra's entire history."
+            );
+            return Ok(ExitCode::from(2));
+        }
+    };
+
+    if let Some(from) = from {
+        eprintln!(
+            "Scraping {PROJECT}/{JOBSET} evaluations from {HYDRA_URL} (from eval id {from})..."
+        );
+    } else {
+        eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
+    }
 
     let progress = indicatif::ProgressBar::no_length();
     let client = Client::new();
@@ -45,6 +88,37 @@ fn main() -> Result<()> {
     create_dir_all(&history_file_dir)?;
 
     let mut history_file = NamedTempFile::new_in(&history_file_dir)?;
+    let mut reached_from = false;
+    let mut max_eval_id: Option<u64> = None;
+
+    // When --from is given, preserve older entries from the existing
+    // history file so we do not lose data we are deliberately not
+    // re-scraping.
+    if let Some(from) = from {
+        match File::open(&history_file_path) {
+            Ok(existing) => {
+                let mut preserved = 0usize;
+                for line in BufReader::new(existing).lines() {
+                    let line = line?;
+                    let eval_id: u64 = match line.split_whitespace().nth(1) {
+                        Some(s) => match s.parse() {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        },
+                        None => continue,
+                    };
+                    if eval_id < from {
+                        history_file.write_all(line.as_bytes())?;
+                        history_file.write_all(b"\n")?;
+                        preserved += 1;
+                    }
+                }
+                eprintln!("Preserved {preserved} existing entries below eval id {from}.");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
 
     loop {
         progress.set_position(parse_page(&page_suffix).unwrap_or(1).into());
@@ -76,6 +150,17 @@ fn main() -> Result<()> {
                 .as_u64()
                 .expect("expected integer");
 
+            if let Some(from) = from {
+                if eval_id < from {
+                    reached_from = true;
+                    continue;
+                }
+            }
+
+            if max_eval_id.map_or(true, |m| eval_id > m) {
+                max_eval_id = Some(eval_id);
+            }
+
             let inputs = eval
                 .get("jobsetevalinputs")
                 .expect("expected key jobsetevalinputs")
@@ -93,6 +178,10 @@ fn main() -> Result<()> {
             history_file.write_all(format!("{revision} {eval_id}\n").as_bytes())?;
         }
 
+        if reached_from {
+            break;
+        }
+
         if let Some(next_page_suffix) = current_page.get("next") {
             page_suffix = next_page_suffix
                 .as_str()
@@ -106,7 +195,14 @@ fn main() -> Result<()> {
     eprintln!("Replacing old history file with new data.");
     history_file.into_temp_path().persist(history_file_path)?;
 
-    Ok(())
+    if let Some(max) = max_eval_id {
+        eprintln!(
+            "Newest eval id fetched: {max}. Pass `--from {max}` on the next run \
+             to only fetch newer evaluations."
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
