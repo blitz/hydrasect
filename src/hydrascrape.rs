@@ -1,4 +1,4 @@
-use std::{fs::create_dir_all, io::Write};
+use std::{env, fs::create_dir_all, io::Write, process::ExitCode};
 
 use anyhow::Result;
 use reqwest::{
@@ -14,12 +14,12 @@ const HYDRA_URL: &str = "https://hydra.nixos.org";
 const PROJECT: &str = "nixos";
 const JOBSET: &str = "unstable-small";
 
-fn fetch_page(client: &Client, page_suffix: &str) -> Result<Value> {
+fn fetch_page(client: &Client, user_agent: &str, page_suffix: &str) -> Result<Value> {
     let url = format!("{HYDRA_URL}/jobset/{PROJECT}/{JOBSET}/evals{}", page_suffix);
 
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, "application/json".parse().unwrap());
-    headers.insert(USER_AGENT, "hydrasect".parse().unwrap());
+    headers.insert(USER_AGENT, user_agent.parse()?);
 
     Ok(client.get(url).headers(headers).send()?.json()?)
 }
@@ -30,7 +30,24 @@ fn parse_page(page_suffix: &str) -> Option<u32> {
         .and_then(|(_first, second)| second.parse().ok())
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
+    let mut args = env::args();
+    let program = args.next().unwrap_or_else(|| "hydrascrape".to_string());
+    let contact = match args.next() {
+        Some(contact) if !contact.is_empty() => contact,
+        _ => {
+            eprintln!(
+                "Usage: {program} <contact>\n\n\
+                 hydra.nixos.org asks scrapers to set a User-Agent identifying\n\
+                 themselves so administrators can reach out if the service is\n\
+                 being overloaded. Pass a contact string (e.g. an email address\n\
+                 or URL) that will be included in the User-Agent header."
+            );
+            return Ok(ExitCode::from(2));
+        }
+    };
+    let user_agent = format!("hydrasect ({contact})");
+
     eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
 
     let progress = indicatif::ProgressBar::no_length();
@@ -49,7 +66,7 @@ fn main() -> Result<()> {
     loop {
         progress.set_position(parse_page(&page_suffix).unwrap_or(1).into());
 
-        let page_content = fetch_page(&client, &page_suffix)?;
+        let page_content = fetch_page(&client, &user_agent, &page_suffix)?;
         let current_page = page_content.as_object().expect("expected object");
 
         if progress.length().is_none() {
@@ -106,7 +123,7 @@ fn main() -> Result<()> {
     eprintln!("Replacing old history file with new data.");
     history_file.into_temp_path().persist(history_file_path)?;
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
