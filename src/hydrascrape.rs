@@ -1,4 +1,9 @@
-use std::{fs::create_dir_all, io::Write};
+use std::{
+    collections::HashSet,
+    env::args,
+    fs::{create_dir_all, File},
+    io::{self, BufRead, BufReader, Write},
+};
 
 use anyhow::Result;
 use reqwest::{
@@ -30,8 +35,29 @@ fn parse_page(page_suffix: &str) -> Option<u32> {
         .and_then(|(_first, second)| second.parse().ok())
 }
 
+fn parse_history_eval_ids(input: impl BufRead) -> io::Result<HashSet<u64>> {
+    let mut ids = HashSet::new();
+    for line in input.split(b'\n') {
+        let line = line?;
+        if let Some(id_bytes) = line.split(|b| *b == b' ').nth(1) {
+            if let Ok(s) = std::str::from_utf8(id_bytes) {
+                if let Ok(id) = s.parse::<u64>() {
+                    ids.insert(id);
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
 fn main() -> Result<()> {
-    eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
+    let force = args().skip(1).any(|a| a == "--force" || a == "-f");
+
+    if force {
+        eprintln!("Scraping all {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
+    } else {
+        eprintln!("Scraping new {PROJECT}/{JOBSET} evaluations from {HYDRA_URL}...");
+    }
 
     let progress = indicatif::ProgressBar::no_length();
     let client = Client::new();
@@ -44,9 +70,21 @@ fn main() -> Result<()> {
 
     create_dir_all(&history_file_dir)?;
 
+    let known_eval_ids: HashSet<u64> = if force {
+        HashSet::new()
+    } else {
+        match File::open(&history_file_path) {
+            Ok(f) => parse_history_eval_ids(BufReader::new(f))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => HashSet::new(),
+            Err(e) => return Err(e.into()),
+        }
+    };
+
     let mut history_file = NamedTempFile::new_in(&history_file_dir)?;
 
-    loop {
+    let mut reached_known = false;
+
+    'pages: loop {
         progress.set_position(parse_page(&page_suffix).unwrap_or(1).into());
 
         let page_content = fetch_page(&client, &page_suffix)?;
@@ -76,6 +114,11 @@ fn main() -> Result<()> {
                 .as_u64()
                 .expect("expected integer");
 
+            if known_eval_ids.contains(&eval_id) {
+                reached_known = true;
+                break 'pages;
+            }
+
             let inputs = eval
                 .get("jobsetevalinputs")
                 .expect("expected key jobsetevalinputs")
@@ -101,6 +144,11 @@ fn main() -> Result<()> {
         } else {
             break;
         }
+    }
+
+    if reached_known {
+        let mut old = BufReader::new(File::open(&history_file_path)?);
+        io::copy(&mut old, history_file.as_file_mut())?;
     }
 
     eprintln!("Replacing old history file with new data.");

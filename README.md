@@ -16,13 +16,14 @@ First you need to download the latest Hydra evaluations via:
 
 ```
 $ hydrascrape
-Scraping all nixos/unstable-small evaluations from https://hydra.nixos.org...
+Scraping new nixos/unstable-small evaluations from https://hydra.nixos.org...
 █████████████████████████████████████████████████████████████████████ 591/591
 Replacing old history file with new data.
 ```
 
-🚧 This currently takes a long time and could be optimized by just
-downloading any data. 🚧
+On subsequent runs, `hydrascrape` only fetches pages containing
+evaluations newer than those already on disk. Pass `--force` (or `-f`)
+to instead re-scrape the full history.
 
 The `hydrasect` program, when run in a Nixpkgs bisect, prints the
 closest commit(s) to HEAD that have been evaluated by hydra.nixos.org,
