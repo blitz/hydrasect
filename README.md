@@ -35,8 +35,6 @@ out a commit to be tested, simply run:
 $ git checkout $(hydrasect | head -1)
 ```
 
-🚧 This will panic if you are not bisecting. 🚧
-
 If there is a suitable Hydra commit, it will be checked out and can be
 tested instead of Git's suggestion.
 
