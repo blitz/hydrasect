@@ -15,11 +15,16 @@ results in cache.nixos.org) remain to be tested.
 First you need to download the latest Hydra evaluations via:
 
 ```
-$ hydrascrape
+$ hydrascrape 'you@example.com'
 Scraping all nixos/unstable-small evaluations from https://hydra.nixos.org...
 █████████████████████████████████████████████████████████████████████ 591/591
 Replacing old history file with new data.
 ```
+
+`hydrascrape` requires a contact string (e.g. an email address or URL) which
+is included in the `User-Agent` header sent to `hydra.nixos.org`. This lets
+the Hydra administrators reach out if your scraping is overloading the
+service, as [requested on the Hydra homepage](https://hydra.nixos.org/).
 
 🚧 This currently takes a long time and could be optimized by just
 downloading any data. 🚧
